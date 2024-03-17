@@ -181,6 +181,7 @@ public:
                 .dlid       = (uint16_t) dst_addr->lid,
                 .sl         = 0,
                 .src_path_bits  = 0,
+                // .static_rate = IBV_RATE_5_GBPS,
                 .is_global  = 0,
                 .port_num   = (uint8_t) ib_port
             },
