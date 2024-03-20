@@ -1,7 +1,8 @@
 #pragma once
 #include "../common/logger.hpp"
 #include "../common/config.hpp"
-#include "../rdma/rdma_utils.hpp"
+#include "../common/types.h"
+#include "../common/utils.h"
 
 class RDMAMaster {
 public:
@@ -10,7 +11,7 @@ public:
     uint32_t master_ip;
     uint16_t master_port;
     
-    struct endpoint_addr *ep_addrs;
+    struct endpoint_info *ep_infos;
     int *qpns;
 
     void master_exchange_address() {
@@ -36,7 +37,7 @@ public:
         ret = listen(fd, n_endpoint);
         logassert(ret < 0, "Cannot listen");
 
-        ep_addrs = new struct endpoint_addr[n_endpoint];
+        ep_infos = new struct endpoint_info[n_endpoint];
         qpns = new int[n_endpoint * (n_endpoint - 1)];
 
         char socket_buf[MAX_SOCKET_BUFSIZE];
@@ -59,15 +60,15 @@ public:
             loginfo("Endpoint ", sin_to_str((struct sockaddr_in *)&conn_addr), " has rank ", i);
 
             /*
-                struct endpoint_addr my_addr;
+                struct endpoint_info my_addr;
                 int qpns[n_dst];
             */
-            int msg_len = sizeof(struct endpoint_addr) + sizeof(int) * (n_endpoint - 1);
+            int msg_len = sizeof(struct endpoint_info) + sizeof(int) * (n_endpoint - 1);
             ret = read(conn_fd, socket_buf, msg_len);
             logassert(ret < msg_len, "Partial read()");
             
-            memcpy(&ep_addrs[i], socket_buf, sizeof(struct endpoint_addr));
-            memcpy(qpns + i * (n_endpoint - 1), socket_buf + sizeof(struct endpoint_addr), msg_len - sizeof(struct endpoint_addr));
+            memcpy(&ep_infos[i], socket_buf, sizeof(struct endpoint_info));
+            memcpy(qpns + i * (n_endpoint - 1), socket_buf + sizeof(struct endpoint_info), msg_len - sizeof(struct endpoint_info));
             
             fd_list[i] = conn_fd;
         }
@@ -76,14 +77,14 @@ public:
             int conn_fd = fd_list[i];
             for (int j = 0; j < n_endpoint; j ++) {
                 if (j != i) {
-                    struct endpoint_addr dst_addr;
-                    memcpy(&dst_addr, &ep_addrs[j], sizeof(struct endpoint_addr));
-                    dst_addr.qpn = qpns[j * (n_endpoint - 1) + i - (i > j)];
-                    memcpy(socket_buf + sizeof(struct endpoint_addr) * (j - (j > i)), &dst_addr, sizeof(struct endpoint_addr));
+                    struct endpoint_info dst_info;
+                    memcpy(&dst_info, &ep_infos[j], sizeof(struct endpoint_info));
+                    dst_info.qpn = qpns[j * (n_endpoint - 1) + i - (i > j)];
+                    memcpy(socket_buf + sizeof(struct endpoint_info) * (j - (j > i)), &dst_info, sizeof(struct endpoint_info));
                 }
             }
-            ret = write(conn_fd, socket_buf, sizeof(struct endpoint_addr) * (n_endpoint - 1));
-            logassert(ret < (int)sizeof(struct endpoint_addr) * (n_endpoint - 1), "Partial write");
+            ret = write(conn_fd, socket_buf, sizeof(struct endpoint_info) * (n_endpoint - 1));
+            logassert(ret < (int)sizeof(struct endpoint_info) * (n_endpoint - 1), "Partial write");
             close(conn_fd);
         }
 

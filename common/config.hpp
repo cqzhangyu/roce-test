@@ -21,6 +21,8 @@ public:
     string master_ip;
     int master_port;
 
+    string p4_name;
+
     string log_file;
     string log_level;
     
@@ -40,6 +42,8 @@ public:
         parser.add<string>("master_ip", 0, "master IP", false, "");
         parser.add<int>("master_port", 0, "master port", false, 1234);
 
+        parser.add<string>("p4_name", 0, "P4 program name", false, "shuffle");
+
         parser.add<string>("log_file", 0, "log file", false, "");
         parser.add<string>("log_level", 0, "log level", false, "info");
     }
@@ -58,6 +62,7 @@ public:
         mtu = parser.get<int>("mtu");
         master_ip = parser.get<string>("master_ip");
         master_port = parser.get<int>("master_port");
+        p4_name = parser.get<string>("p4_name");
 
         log_file = parser.get<string>("log_file");
         log_level = parser.get<string>("log_level");

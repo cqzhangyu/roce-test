@@ -33,24 +33,18 @@ uint32_t gid_to_ipv4(union ibv_gid gid)
     return (uint32_t)be64toh(gid.global.interface_id);
 }
 
-string gid_to_str(ibv_gid gid)
+string gid_to_str(ibv_gid *gid)
 {
     string s;
-    s.reserve(sizeof(gid)/2*3);
+    s.reserve(sizeof(ibv_gid)/2*3);
     char buf[20];
-    int len = sizeof(gid)/sizeof(uint16_t);
+    int len = sizeof(ibv_gid)/sizeof(uint16_t);
     for(int i = 0; i < len; i++) {
-        sprintf(buf, "%04x", (uint32_t)ntohs(((uint16_t*)&gid)[i]));
+        sprintf(buf, "%04x", (uint32_t)ntohs(((uint16_t*)gid)[i]));
         s += buf;
         if(i < len - 1) s += ':';
     }
     return s;
-}
-
-string sin_to_str(struct sockaddr_in *sin) {
-    char buf[INET6_ADDRSTRLEN];
-    inet_ntop(AF_INET, &sin->sin_addr, buf, sizeof(buf));
-    return string(buf) + ":" + std::to_string(ntohs(sin->sin_port));
 }
 
 // input ens10f1

@@ -10,8 +10,8 @@ int main(int argc, char **argv) {
     ep.run();
 
 
-    if (ep.my_addr.rank == 0) {
-        ret = ep.post_read(0, 0, 0, ep.dst_addrs[0].addr, ep.my_addr.addr, 1024);
+    if (ep.my_info.rank == 0) {
+        ret = ep.post_read(0, 0, 0, ep.dst_infos[0].addr, ep.my_info.addr, 1024);
         logassert(ret != 0, "Cannot post read");
         loginfo("Post read succeeded");
         // wait for 100ms

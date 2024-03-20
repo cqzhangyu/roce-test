@@ -9,6 +9,7 @@ int main(int argc, char **argv) {
     string dev_name = get_dev_by_ip(cfg.bind_ip);
     string ib_dev_name = dev_to_ib_dev(dev_name);
     struct ibv_device *ib_dev = find_ib_device(ib_dev_name);
+    logassert(ib_dev == NULL, "Cannot find ib device", ib_dev_name);
     struct ibv_context *context = ibv_open_device(ib_dev);
     logassert(context == NULL, "Cannot open ib device", ib_dev_name);
 

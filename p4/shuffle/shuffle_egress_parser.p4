@@ -13,12 +13,13 @@ parser ShuffleEgressParser(packet_in        pkt,
         pkt.extract(hdr.mirror_bridge);
         transition select(hdr.mirror_bridge.pkt_type) {
             PKT_TYPE_BYPASS : accept;
-            PKT_TYPE_MIRROR : parser_repl;
+            PKT_TYPE_MIRROR : parse_repl;
             default : reject;
         }
     }
-    state parser_repl {
+    state parse_repl {
         pkt.extract(hdr.repl);
+        pkt.extract(hdr.item0);
         pkt.extract(hdr.eth);
         transition accept;
     }

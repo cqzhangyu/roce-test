@@ -1,11 +1,14 @@
 #pragma once
 
+#include <infiniband/verbs.h>
+
 #include "../common/config.hpp"
 #include "../common/huge_malloc.h"
 #include "../common/logger.hpp"
 #include "../common/ring_buffer.hpp"
+#include "../common/types.h"
+#include "../common/utils.h"
 
-#include "../rdma/rdma_types.h"
 #include "../rdma/rdma_utils.hpp"
 
 class RDMAEndpoint {
@@ -18,8 +21,8 @@ public:
     vector<struct ibv_cq *> cqs;
     vector<struct ibv_wc *> wcs;
     vector<struct ibv_qp *> qps;
-    struct endpoint_addr    my_addr;
-    vector<struct endpoint_addr> dst_addrs;
+    struct endpoint_info    my_info;
+    vector<struct endpoint_info> dst_infos;
     void            *mr_mmap;
     size_t          mr_size;
     int             ib_port;
@@ -121,7 +124,7 @@ public:
         ret = read(fd, socket_buf, sizeof(int) * 2);
         logassert(ret < (int)sizeof(int) * 2, "Partial read()");
         n_dst = *(int *)socket_buf;
-        my_addr.rank = *(int *)(socket_buf + sizeof(int));
+        my_info.rank = *(int *)(socket_buf + sizeof(int));
 
         // init QP
         qps.resize(n_dst);
@@ -141,24 +144,24 @@ public:
         loginfo("Created QP");
 
         /*
-            struct endpoint_addr my_addr;
+            struct endpoint_info my_info;
             int qpns[n_dst];
         */
-        memcpy(socket_buf, &my_addr, sizeof(struct endpoint_addr));
+        memcpy(socket_buf, &my_info, sizeof(struct endpoint_info));
         for (int i = 0; i < n_dst; i ++) {
-            *(int *)(socket_buf + sizeof(struct endpoint_addr) + sizeof(int) * i) = qps[i]->qp_num;
+            *(int *)(socket_buf + sizeof(struct endpoint_info) + sizeof(int) * i) = qps[i]->qp_num;
             // logdebug("my qp for dst ", i, " is ", qps[i]->qp_num);
         }
-        int msg_len = sizeof(struct endpoint_addr) + sizeof(int) * n_dst;
+        int msg_len = sizeof(struct endpoint_info) + sizeof(int) * n_dst;
         ret = write(fd, socket_buf, msg_len);
         logassert(ret < msg_len, "Partial write()");
 
         /*
-            struct endpoint_addr dst_addrs[n_dst];
+            struct endpoint_info dst_infos[n_dst];
         */
-        dst_addrs.resize(n_dst);
-        msg_len = sizeof(struct endpoint_addr) * n_dst;
-        ret = read(fd, &dst_addrs[0], msg_len);
+        dst_infos.resize(n_dst);
+        msg_len = sizeof(struct endpoint_info) * n_dst;
+        ret = read(fd, &dst_infos[0], msg_len);
         logassert(ret < msg_len, "Partial read()");
         loginfo("Received destination endpoint addresses");
 
@@ -167,18 +170,18 @@ public:
 
     void move_qp_to_rts(int dst_id) {
         struct ibv_qp *qp = qps[dst_id];
-        struct endpoint_addr *dst_addr = &dst_addrs[dst_id];
+        struct endpoint_info *dst_info = &dst_infos[dst_id];
 
-        // logdebug("dst ", dst_id, "'s qp_num is ", dst_addr->qpn);
+        // logdebug("dst ", dst_id, "'s qp_num is ", dst_info->qpn);
         int ret;
         // INIT -> RTR
         struct ibv_qp_attr attr = {
             .qp_state       = IBV_QPS_RTR,
             .path_mtu       = mtu,
-            .rq_psn         = (uint32_t) dst_addr->psn,
-            .dest_qp_num    = (uint32_t) dst_addr->qpn,
+            .rq_psn         = (uint32_t) dst_info->psn,
+            .dest_qp_num    = (uint32_t) dst_info->qpn,
             .ah_attr        = {
-                .dlid       = (uint16_t) dst_addr->lid,
+                .dlid       = (uint16_t) dst_info->lid,
                 .sl         = 0,
                 .src_path_bits  = 0,
                 // .static_rate = IBV_RATE_5_GBPS,
@@ -193,10 +196,10 @@ public:
         // loginfo("Use 2.5Gbps link");
 
         // grh must be set in RoCE
-        if(dst_addr->gid.global.interface_id) {
+        if(((ibv_gid *)(dst_info->gid))->global.interface_id) {
             attr.ah_attr.is_global = 1;
             attr.ah_attr.grh.hop_limit = 1;
-            attr.ah_attr.grh.dgid = dst_addr->gid;
+            memcpy(&attr.ah_attr.grh.dgid, dst_info->gid, sizeof(ibv_gid));
             attr.ah_attr.grh.sgid_index = gid_index;
         }
 
@@ -217,7 +220,7 @@ public:
         attr.timeout        = 8;// 4=65us, 8=1ms, 14=67ms, 18=1s, 31=8800s, 0=INF
         attr.retry_cnt      = 7;
         attr.rnr_retry      = 7;// 7 means retry infinitely when RNR NACK is received
-        attr.sq_psn         = my_addr.psn;
+        attr.sq_psn         = my_info.psn;
         attr.max_rd_atomic  = 1;
 
         ret = ibv_modify_qp(qp, &attr, 
@@ -273,14 +276,18 @@ public:
 
         struct ibv_port_attr port_attr;
         ibv_query_port(context, ib_port, &port_attr);
-        my_addr.rank = 0;
-        my_addr.lid = port_attr.lid;
-        my_addr.psn = psn;
-        my_addr.qpn = 0;
-        my_addr.addr = mr_mmap;
-        my_addr.rkey = mr->rkey;
-        ibv_query_gid(context, ib_port, gid_index, &my_addr.gid);
-        loginfo("GID: ", gid_to_str(my_addr.gid));
+        my_info.rank = 0;
+        my_info.lid = port_attr.lid;
+        my_info.psn = psn;
+        my_info.qpn = 0;
+        my_info.addr = mr_mmap;
+        my_info.rkey = mr->rkey;
+        ibv_query_gid(context, ib_port, gid_index, (ibv_gid *)my_info.gid);
+        for (size_t i = 0; i < sizeof(ibv_gid); i ++) {
+            printf("%02hhx:", my_info.gid[i]);
+        }
+        logger << "\n";
+        loginfo("GID: ", gid_to_str((ibv_gid *)(my_info.gid)));
 
         // exchange addresses and create QP
         endpoint_exchange_address();
@@ -291,7 +298,7 @@ public:
         loginfo("Moved QPs to RTS");
     }
 
-    int post_read(int dst, uint64_t wr_id, int thread_id, void *dst_addr, void *src_addr, uint32_t length) {
+    int post_read(int dst, uint64_t wr_id, int thread_id, void *dst_info, void *src_addr, uint32_t length) {
         int ret;
         struct ibv_sge list = {
             .addr   = (uintptr_t) src_addr,
@@ -306,8 +313,8 @@ public:
             .send_flags = IBV_SEND_SIGNALED,
         };
         
-        wr.wr.rdma.remote_addr = (uintptr_t) dst_addr;
-        wr.wr.rdma.rkey = dst_addrs[dst].rkey;
+        wr.wr.rdma.remote_addr = (uintptr_t) dst_info;
+        wr.wr.rdma.rkey = dst_infos[dst].rkey;
         struct ibv_send_wr *bad_wr;
         ret = ibv_post_send(qps[dst], &wr, &bad_wr);
         // logassert(ret != 0, "Cannot post read");

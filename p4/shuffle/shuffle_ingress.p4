@@ -16,13 +16,23 @@ control ShuffleIngress(
     bit<16> dst_id = 0;
     // shuffle unit id
     bit<16> unit_id = 0;
+    // shuffle unit id shift left
+    bit<16> shl_unit_id = 0;
+    // shuffle unit id
+    bit<16> unit_id_2 = 0;
+    // shuffle unit id shift left
+    bit<16> shl_unit_id_2 = 0;
+    // shuffle item id
+    bit<16> item_id = 0;
     // payload length
     bit<16> item_len = 0;
-    // PSN ring id
-    bit<16> ring_id = 0;
+    // read PSN ring id
+    bit<16> read_ring_id = 0;
+    // write PSN ring id
+    bit<16> write_ring_id = 0;
 
     // method case
-    bit<8> method_case = 0;
+    bit<8> method_case = CASE_BYPASS;
 
     bool inc_req_msn = false;
     bool update_req_dst_addr = false;
@@ -30,7 +40,6 @@ control ShuffleIngress(
 
     // temporary variables
     bit<32> tmp_msn = 0;
-    bit<32> tmp_psn = 0;
     bit<64> tmp_dst_addr = 0;
     bit<64> tmp_write_offset = 0;
     bit<32> tmp_read_ring_head = 0;
@@ -96,31 +105,34 @@ control ShuffleIngress(
     Register<bit<16>, bit<16> >(MAX_NUM_ENDP * UNIT_PER_ENDP) unit_remain;
     Register<bit<32>, bit<16> >(MAX_NUM_ENDP * UNIT_PER_ENDP * ITEM_PER_UNIT) item_write_offset;
 
-    
-    action calculate_unit_id_hi() {
-        unit_id = dst_id << UNIT_SHIFT;
+    action calculate_unit_id_lo(bit<16> _unit_id_tail) {
+        unit_id = unit_id | _unit_id_tail;
     }
-    action calculate_unit_id_lo(bit<16> unit_id_tail) {
-        unit_id = unit_id | unit_id_tail;
+    action calculate_unit_id_from_item_id_2(bit<16> _item_id) {
+        unit_id_2 = _item_id >> ITEM_SHIFT;
     }
-    action calculate_unit_id_from_item_id(bit<16> item_id) {
-        unit_id = item_id >> ITEM_SHIFT;
+    action calculate_shl_unit_id(bit<16> _unit_id) {
+        shl_unit_id = _unit_id << SHL_UNIT_SHIFT;
     }
-
-    action calculate_write_ring_id_hi() {
-        ring_id = dst_id << WRITE_RING_SHIFT;
+    action calculate_shl_unit_id_2(bit<16> _unit_id) {
+        shl_unit_id_2 = _unit_id << SHL_UNIT_SHIFT;
     }
-
-    action calculate_read_ring_id_hi() {
-        ring_id = src_dst_id << READ_RING_SHIFT;
+    action calculate_unit_id_from_shl(bit<16> _shl_unit_id) {
+        unit_id_2 = _shl_unit_id >> SHL_UNIT_SHIFT;
     }
 
-    action calculate_ring_id_lo(bit<16> ring_id_tail) {
-        ring_id = ring_id | ring_id_tail;
+    action calculate_read_ring_id_lo(bit<16> ring_id_tail) {
+        read_ring_id = read_ring_id | ring_id_tail;
+    }
+    action calculate_write_ring_id_lo(bit<16> ring_id_tail) {
+        write_ring_id = write_ring_id | ring_id_tail;
     }
 
-    action calculate_item_cnt() {
-        hdr.repl.item_cnt = (item_len >> ITEM_SIZE_SHIFT);
+    action calculate_repl_item_id(bit<16> _unit_id) {
+        hdr.repl.item_id = _unit_id << ITEM_SHIFT;
+    }
+    action calculate_item_cnt(bit<16> _item_len) {
+        hdr.repl.item_cnt = (_item_len >> ITEM_SIZE_SHIFT);
     }
 
     action rx_request_first(bit<16> _dst_id) {
@@ -177,20 +189,11 @@ control ShuffleIngress(
         method_case = CASE_WRITE_ACK;
     }
 
-    action rx_write_nak(bit<16> _dst_id) {
-        dst_id = _dst_id;   // based on smac
-
-        method_case = CASE_WRITE_NAK;
-        update_endp_state = true;
-        tmp_endp_state = 0;
-    }
-
     table roce_method_tbl {
         key = {
             hdr.eth.src_addr : exact;
             hdr.bth.opcode : exact;
             hdr.bth.dqpn : exact;
-
         }
         actions = {
             rx_request_first;
@@ -207,7 +210,7 @@ control ShuffleIngress(
         default_action = NoAction;
     }
 
-    action rx_repl_single(bit<16> _dst_id, bit<16> _src_dst_id) {
+    action rx_repl_only_action(bit<16> _dst_id, bit<16> _src_dst_id) {
         dst_id = _dst_id;   // based on smac
         src_dst_id = _src_dst_id;   // from item
 
@@ -220,7 +223,7 @@ control ShuffleIngress(
             hdr.item0.src_id : exact;
         }
         actions = {
-            rx_repl_single;
+            rx_repl_only_action;
             NoAction;
         }
         size = 512;
@@ -228,13 +231,13 @@ control ShuffleIngress(
     }
     
     action tx_src_read_action(PortId_t port,
-                          mac_addr_t src_mac, 
-                          mac_addr_t dst_mac, 
-                          ipv4_addr_t src_ip, 
-                          ipv4_addr_t dst_ip, 
-                          bit<16> udp_src_port, 
-                          bit<24> dqpn,
-                          bit<32> rkey) {
+                              mac_addr_t src_mac, 
+                              mac_addr_t dst_mac, 
+                              ipv4_addr_t src_ip, 
+                              ipv4_addr_t dst_ip, 
+                              bit<16> udp_src_port, 
+                              bit<24> dqpn,
+                              bit<32> rkey) {
         ig_tm_md.ucast_egress_port = port;
 
         hdr.eth.src_addr = src_mac;
@@ -282,14 +285,14 @@ control ShuffleIngress(
         default_action = NoAction;
     }
 
-    action tx_repl_only(PortId_t port) {
+    action tx_repl_only_action(PortId_t port) {
         hdr.eth.ether_type = ETHERTYPE_REPL;
         hdr.repl.item_cnt = 1;
 
         ig_tm_md.ucast_egress_port = port;
     }
 
-    action tx_repl_many(PortId_t port, MirrorId_t sess) {
+    action tx_repl_many_action(PortId_t port, MirrorId_t sess) {
         // item0 in the mirror packet
         ig_tm_md.ucast_egress_port = port;
 
@@ -297,9 +300,15 @@ control ShuffleIngress(
 
         ig_md.sess = sess;
         ig_md.pkt_type = PKT_TYPE_MIRROR;
+
         ig_md.flag = 0;
         ig_md.item_id = hdr.repl.item_id;
         ig_md.item_cnt = 1;
+
+        ig_md.src_id = hdr.item0.src_id;
+        ig_md.len = hdr.item0.len;
+        ig_md.write_off = hdr.item0.write_off;
+        ig_md.src_addr = hdr.item0.src_addr;
 
         // item1... in the original packet
         hdr.eth.ether_type = ETHERTYPE_REPL;
@@ -313,7 +322,7 @@ control ShuffleIngress(
             hdr.eth.src_addr : exact;
         }
         actions = {
-            tx_repl_only;
+            tx_repl_only_action;
             NoAction;
         }
         size = 256;
@@ -325,7 +334,7 @@ control ShuffleIngress(
             hdr.eth.src_addr : exact;
         }
         actions = {
-            tx_repl_many;
+            tx_repl_many_action;
             NoAction;
         }
         size = 256;
@@ -333,13 +342,13 @@ control ShuffleIngress(
     }
 
     action tx_dst_write_action(PortId_t port,
-                           mac_addr_t src_mac, 
-                           mac_addr_t dst_mac, 
-                           ipv4_addr_t src_ip, 
-                           ipv4_addr_t dst_ip, 
-                           bit<16> udp_src_port, 
-                           bit<24> dqpn,
-                           bit<32> rkey) {
+                               mac_addr_t src_mac, 
+                               mac_addr_t dst_mac, 
+                               ipv4_addr_t src_ip, 
+                               ipv4_addr_t dst_ip, 
+                               bit<16> udp_src_port, 
+                               bit<24> dqpn,
+                               bit<32> rkey) {
         ig_tm_md.ucast_egress_port = port;
                             
         hdr.reth.len = (bit<32>)(hdr.udp.hdr_length - 28);
@@ -460,13 +469,13 @@ control ShuffleIngress(
 
     RegisterAction<bit<16>, bit<16>, bit<16> >(req_unack_unit) req_unack_unit_sub = {
         void apply(inout bit<16> reg_data, out bit<16> result) {
-            result = reg_data - unit_id;
+            result = reg_data - shl_unit_id;
         }
     };
     RegisterAction<bit<16>, bit<16>, bit<8> >(req_unack_unit) req_unack_unit_inc = {
         void apply(inout bit<16> reg_data, out bit<8> result) {
-            if (reg_data == unit_id) {
-                reg_data = reg_data + 1;
+            if (reg_data == shl_unit_id_2) {
+                reg_data = reg_data + (1<<SHL_UNIT_SHIFT);
                 result = 0;
             }
             else {
@@ -589,7 +598,7 @@ control ShuffleIngress(
         void apply(inout bit<16> reg_data, out bit<16> result) {
             result = reg_data;
             if (method_case == CASE_REPL_ONLY) {
-                reg_data = hdr.repl.item_id;
+                reg_data = item_id;
             }
         }
     };
@@ -612,12 +621,14 @@ control ShuffleIngress(
         }
     };
 
-    RegisterAction<bit<16>, bit<16>, bit<16> >(write_psn_to_unit) write_psn_to_unit_action = {
+    RegisterAction<bit<16>, bit<16>, bit<16> >(write_psn_to_unit) write_psn_to_unit_set = {
+        void apply(inout bit<16> reg_data, out bit<16> result) {
+            reg_data = shl_unit_id;
+        }
+    };
+    RegisterAction<bit<16>, bit<16>, bit<16> >(write_psn_to_unit) write_psn_to_unit_get = {
         void apply(inout bit<16> reg_data, out bit<16> result) {
             result = reg_data;
-            if (method_case == CASE_READ_RESPONSE) {
-                reg_data = unit_id;
-            }
         }
     };
 
@@ -638,6 +649,26 @@ control ShuffleIngress(
         } */
         if (hdr.bth.isValid()) {
             roce_method_tbl.apply();
+
+            if (method_case == CASE_WRITE_ACK && hdr.aeth.syndrome[6:5] != 0) {
+                method_case = CASE_WRITE_NAK;
+                update_endp_state = true;
+                tmp_endp_state = 0;
+            }
+
+            read_ring_id = src_dst_id << READ_RING_SHIFT;
+            write_ring_id = src_dst_id << WRITE_RING_SHIFT;
+            unit_id = dst_id << UNIT_SHIFT;
+
+            bit<16> read_ring_id_tail = hdr.bth.psn[15:0] & ((1<<READ_RING_SHIFT)-1);
+            bit<16> write_ring_id_tail = hdr.bth.psn[15:0] & ((1<<WRITE_RING_SHIFT)-1);
+            bit<16> unit_id_tail = hdr.bth.psn[15:0] & ((1<<UNIT_SHIFT)-1);
+
+            calculate_read_ring_id_lo(read_ring_id_tail);
+            calculate_write_ring_id_lo(write_ring_id_tail);
+            calculate_unit_id_lo(unit_id_tail);
+            
+            calculate_shl_unit_id(unit_id);
         }
         else if (hdr.repl.isValid()) {
             if (hdr.repl.item_cnt == 1) {
@@ -672,11 +703,8 @@ control ShuffleIngress(
                     tx_loopback_tbl.apply();
                 }
                 else {
-                    calculate_read_ring_id_hi();
-                    bit<16> ring_id_tail = hdr.bth.psn[15:0] & ((1<<READ_RING_SHIFT)-1);
-                    calculate_ring_id_lo(ring_id_tail);
-
-                    bit<16> item_id = read_psn_to_item_action.execute(ring_id);
+                    item_id = hdr.repl.item_id;
+                    item_id = read_psn_to_item_action.execute(read_ring_id);
 
                     item_write_offset_action.execute(item_id);
 
@@ -690,17 +718,38 @@ control ShuffleIngress(
                 drop();
             }
         }
-        else if (method_case == CASE_REPL_MANY) {
-            if (tmp_endp_state == 1) {
-                tx_repl_many_tbl.apply();
+        else if (method_case == CASE_READ_RESPONSE) {
+            bit<24> tmp_unack_psn = (bit<24>)read_unack_psn_set.execute(src_dst_id);
+            if (tmp_endp_state == 1 && tmp_unack_psn == hdr.bth.psn) {
+                item_id = read_psn_to_item_action.execute(read_ring_id);
+                calculate_unit_id_from_item_id_2(item_id);
+                calculate_shl_unit_id_2(unit_id_2);
+
+                hdr.bth.psn = (bit<24>)write_psn_action.execute(dst_id);
+
+                write_psn_to_unit_set.execute(write_ring_id);
+
+                tmp_dst_addr[63:32] = unit_dst_addr_hi_action.execute(unit_id_2);
+                tmp_dst_addr[31:0] = unit_dst_addr_lo_action.execute(unit_id_2);
+                tmp_write_offset[63:32] = 0;
+                tmp_write_offset[31:0] = item_write_offset_action.execute(item_id);
+
+                hdr.bth.ackreq_rsv = unit_remain_dec.execute(unit_id_2);
+
+                hdr.reth.setValid();
+
+                tx_dst_write_tbl.apply();
+
+                hdr.aeth.setInvalid();
             }
         }
+        else if (method_case == CASE_READ_NAK) {
+            tmp_read_ring_head = (bit<32>)hdr.bth.psn;
+            read_unack_psn_set.execute(src_dst_id);
+            read_psn_set.execute(src_dst_id);
+            drop();
+        }
         else if (method_case == CASE_REQUEST) {
-
-            calculate_unit_id_hi();
-            bit<16> unit_id_tail = hdr.bth.psn[15:0] & ((1<<UNIT_SHIFT)-1);
-            calculate_unit_id_lo(unit_id_tail);
-            
             bit<32> psn_minus_req_epsn = req_epsn_action.execute(dst_id);
             bit<16> unit_minus_unack = req_unack_unit_sub.execute(dst_id);
             
@@ -716,13 +765,14 @@ control ShuffleIngress(
                 hdr.aeth.msn = (bit<24>)req_msn_action.execute(dst_id);
                 tx_req_ack_tbl.apply();
             }
-            else if (unit_minus_unack == (UNIT_PER_ENDP-1)) {
+            else if (unit_minus_unack == ((UNIT_PER_ENDP-1)<<(16-UNIT_SHIFT-ENDP_SHIFT))) {
                 // run out of unit
                 drop();
             }
             else {
                 hdr.repl.setValid();
-                calculate_item_cnt();
+                calculate_item_cnt(item_len);
+                calculate_repl_item_id(unit_id);
 
                 if (psn_minus_req_epsn == 0) {
                     tmp_msn = req_msn_action.execute(dst_id);
@@ -740,7 +790,6 @@ control ShuffleIngress(
                     unit_remain_set.execute(unit_id);
                     hdr.repl.flag = REPL_FLAG_SETSTATE;
                 }
-                hdr.repl.item_id = unit_id << ITEM_SHIFT;
 
                 hdr.ipv4.setInvalid();
                 hdr.udp.setInvalid();
@@ -755,63 +804,31 @@ control ShuffleIngress(
                 }
             }
         }
-        else if (method_case == CASE_READ_RESPONSE) {
-            calculate_read_ring_id_hi();
-            bit<16> ring_id_tail = hdr.bth.psn[15:0] & ((1<<READ_RING_SHIFT)-1);
-            calculate_ring_id_lo(ring_id_tail);
-
-            bit<24> tmp_unack_psn = (bit<24>)read_unack_psn_set.execute(src_dst_id);
-            if (tmp_endp_state == 1 && tmp_unack_psn == hdr.bth.psn) {
-                bit<16> item_id = read_psn_to_item_action.execute(ring_id);
-                hdr.bth.psn = (bit<24>)write_psn_action.execute(dst_id);
-
-                calculate_unit_id_from_item_id(item_id);
-
-                calculate_write_ring_id_hi();
-                bit<16> write_tail = hdr.bth.psn[15:0] & ((1<<WRITE_RING_SHIFT)-1);
-                calculate_ring_id_lo(write_tail);
-
-                write_psn_to_unit_action.execute(ring_id);
-
-                tmp_dst_addr[63:32] = unit_dst_addr_hi_action.execute(unit_id);
-                tmp_dst_addr[31:0] = unit_dst_addr_lo_action.execute(unit_id);
-                tmp_write_offset[63:32] = 0;
-                tmp_write_offset[31:0] = item_write_offset_action.execute(item_id);
-
-                hdr.bth.ackreq_rsv = unit_remain_dec.execute(unit_id);
-
-                hdr.reth.setValid();
-
-                tx_dst_write_tbl.apply();
-
-                hdr.aeth.setInvalid();
-            }
-        }
-        else if (method_case == CASE_READ_NAK) {
-            tmp_read_ring_head = (bit<32>)hdr.bth.psn;
-            read_unack_psn_set.execute(src_dst_id);
-            read_psn_set.execute(src_dst_id);
-            drop();
-        }
-        else if (method_case == CASE_WRITE_ACK) {
-            calculate_write_ring_id_hi();
-            bit<16> write_tail = hdr.bth.psn[15:0] & ((1<<WRITE_RING_SHIFT)-1);
-            calculate_ring_id_lo(write_tail);
-
-            unit_id = write_psn_to_unit_action.execute(ring_id);
-
-            bit<8> ret_req_unack_unit_inc = req_unack_unit_inc.execute(dst_id);
-            if (ret_req_unack_unit_inc != 0 || tmp_endp_state == 0) {
-                drop();
-            }
-            else {
-                hdr.aeth.msn = (bit<24>)unit_req_msn_action.execute(unit_id);
-                hdr.bth.psn = (bit<24>)unit_req_psn_action.execute(unit_id);
-                tx_req_ack_tbl.apply();
+        else if (method_case == CASE_REPL_MANY) {
+            if (tmp_endp_state == 1) {
+                tx_repl_many_tbl.apply();
             }
         }
         else if (method_case == CASE_WRITE_NAK) {
             write_psn_action.execute(dst_id);
+        }
+        else if (method_case == CASE_WRITE_ACK) {
+            shl_unit_id_2 = write_psn_to_unit_get.execute(write_ring_id);
+            calculate_unit_id_from_shl(shl_unit_id_2);
+
+            bit<8> ret_req_unack_unit_inc = req_unack_unit_inc.execute(dst_id);
+
+            if (ret_req_unack_unit_inc == 1) {
+                drop();
+            }
+            else {
+                hdr.aeth.msn = (bit<24>)unit_req_msn_action.execute(unit_id_2);
+                hdr.bth.psn = (bit<24>)unit_req_psn_action.execute(unit_id_2);
+                tx_req_ack_tbl.apply();
+            }
+        }
+        else if (method_case == CASE_BYPASS) {
+            l2_route.apply();
         }
 
     }

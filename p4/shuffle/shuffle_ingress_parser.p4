@@ -16,8 +16,15 @@ parser ShuffleIngressParser(
         pkt.extract(hdr.eth);
         transition select(hdr.eth.ether_type) {
             ETHERTYPE_IPV4 : parse_ipv4;
+            ETHERTYPE_REPL : parse_repl;
             default : reject;
         }
+    }
+    
+    state parse_repl {
+        pkt.extract(hdr.repl);
+        pkt.extract(hdr.item0);
+        transition accept;
     }
 
     state parse_ipv4 {
@@ -88,9 +95,15 @@ control ShuffleIngressDeparser(packet_out pkt,
         if (ig_intr_dprsr_md.mirror_type == MIRROR_TYPE_I2E) {
             mirror.emit<mirror_h>(ig_md.sess, {
                 ig_md.pkt_type,
+                // ig_md._mb_pad,
                 ig_md.flag,
+                // ig_md._repl_pad,
                 ig_md.item_cnt,
-                ig_md.item_id});
+                ig_md.item_id,
+                ig_md.src_id,
+                ig_md.len,
+                ig_md.write_off,
+                ig_md.src_addr});
         }
         if (hdr.ipv4.isValid()) {
             hdr.ipv4.hdr_checksum = csum.update({
