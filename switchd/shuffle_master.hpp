@@ -11,7 +11,7 @@
 class ShuffleMaster {
 public:
     int n_ep;
-    int fp_rank[MAX_NUM_ENDPOINT];
+    uint32_t fp_rank[MAX_NUM_ENDPOINT];
     struct endpoint_info ep_infos[MAX_NUM_ENDPOINT];
     struct shuffle_qp_info qp_infos[MAX_NUM_ENDPOINT];
 
@@ -22,16 +22,8 @@ public:
 
     int listen_fd;
     int conn_fds[MAX_NUM_ENDPOINT];
-    int n_conn;
 
     volatile bool is_closed;
-
-    enum master_state {
-        IDLE,
-        LISTEN,
-        RUNNING, 
-        CLOSED
-    }state;
 
     ShuffleMaster(Config &cfg)
         : n_ep(cfg.n_endpoint),
@@ -39,7 +31,6 @@ public:
 
         master_ip = ntohl(inet_addr(cfg.master_ip.c_str()));
         master_port = cfg.master_port;
-        state = IDLE;
         is_closed = false;
     }
 
@@ -65,7 +56,7 @@ public:
 
     void listen() {
         int ret;
-        n_conn = 0;
+        loginfo("Start listening on ", ip_to_str(htonl(master_ip)), ":", master_port);
         ret = ::listen(listen_fd, n_ep);
         logassert(ret < 0, "Cannot listen");
     }
@@ -73,7 +64,7 @@ public:
     void accept() {
         ssize_t ret;
         struct sockaddr conn_addr;
-        socklen_t conn_addr_len;
+        socklen_t conn_addr_len = sizeof(conn_addr);
         char socket_buf[MAX_SOCKET_BUFSIZE];
         struct msg_accept msg_acc;
         for (int i = 0; i < n_ep; i ++) {
@@ -82,21 +73,25 @@ public:
             logassert(conn_fd < 0, "Cannot accept");
             loginfo("Accepted connection from ", sin_to_str((struct sockaddr_in *)&conn_addr));
 
+            // Magic number here!
+            // fp_rank is the last byte of the ip address - 1
+            fp_rank[i] = (ntohl(((struct sockaddr_in *)&conn_addr)->sin_addr.s_addr) & 0xff) - 1;
+
             msg_acc.type = MSG_TYPE_ACCEPT;
             msg_acc.n_ep = n_ep;
-            msg_acc.rank = n_conn;
+            msg_acc.rank = i;
             
             ret = send(conn_fd, &msg_acc, sizeof(struct msg_accept), 0);
             logassert(ret != sizeof(struct msg_accept), "Wrong send length");
-            loginfo("Endpoint ", sin_to_str((struct sockaddr_in *)&conn_addr), " has rank ", n_conn);
+            loginfo("Endpoint ", sin_to_str((struct sockaddr_in *)&conn_addr), " has rank ", i);
 
             ret = recv(conn_fd, socket_buf, sizeof(struct msg_gather), 0);
             logassert(ret != sizeof(struct msg_gather), "Unexpected recv length");
             struct msg_gather *msg_gat = (struct msg_gather *)socket_buf;
             logassert(msg_gat->type != MSG_TYPE_GATHER, "Invalid message type");
             
-            memcpy(&ep_infos[n_conn], &msg_gat->ep_info, sizeof(struct endpoint_info));
-            memcpy(&qp_infos[n_conn], &msg_gat->qp_info, sizeof(struct shuffle_qp_info));
+            memcpy(&ep_infos[i], &msg_gat->ep_info, sizeof(struct endpoint_info));
+            memcpy(&qp_infos[i], &msg_gat->qp_info, sizeof(struct shuffle_qp_info));
 
             conn_fds[i] = conn_fd;
         }
@@ -106,6 +101,7 @@ public:
         ssize_t ret;
         struct msg_scatter msg_sca;
         msg_sca.type = MSG_TYPE_SCATTER;
+        memcpy(&msg_sca.vir_ep_info, &vir_ep_info, sizeof(struct endpoint_info));
         memcpy(msg_sca.ep_infos, ep_infos, sizeof(struct endpoint_info) * n_ep);
         msg_sca.dqp_info.req_qpn = vir_qp_info.req_qpn;
         msg_sca.dqp_info.dst_qpn = vir_qp_info.dst_qpn;
@@ -119,7 +115,6 @@ public:
             ret = send(conn_fd, &msg_sca, sizeof(struct msg_scatter), 0);
             logassert(ret != sizeof(struct msg_scatter), "Wrong send size");
         }
-        state = RUNNING;
     }
 
     void join() {
@@ -135,6 +130,28 @@ public:
         }
     }
 
+    void dump_reg() {
+        drv.dump_reg("ShuffleIngress.endp_state", n_ep);
+        drv.dump_reg("ShuffleEgress.req_msn.req_msn", n_ep);
+        drv.dump_reg("ShuffleIngress.write_psn.write_psn", n_ep);
+        drv.dump_reg("ShuffleEgress.req_epsn.req_epsn", n_ep);
+        drv.dump_reg("ShuffleEgress.req_unack_unit.req_unack_unit", n_ep);
+        drv.dump_reg("ShuffleIngress.read_unack_psn.read_unack_psn", n_ep * n_ep);
+        drv.dump_reg("ShuffleIngress.read_psn.read_psn", n_ep * n_ep);
+        drv.dump_reg("ShuffleIngress.read_psn_to_item.read_psn_to_item", 16);
+        drv.dump_reg("ShuffleEgress.write_psn_to_unit.write_psn_to_unit", 16);
+        drv.dump_reg("ShuffleEgress.item_write_offset.item_write_offset", 16);
+        drv.dump_reg("ShuffleEgress.req_dst_addr.req_dst_addr_hi", 16);
+        drv.dump_reg("ShuffleEgress.req_dst_addr.req_dst_addr_lo", 16);
+        drv.dump_reg("ShuffleEgress.unit_req_psn.unit_req_psn", 16);
+        drv.dump_reg("ShuffleEgress.unit_req_msn.unit_req_msn", 16);
+        drv.dump_reg("ShuffleEgress.unit_dst_addr.unit_dst_addr_hi", 16);
+        drv.dump_reg("ShuffleEgress.unit_dst_addr.unit_dst_addr_lo", 16);
+        drv.dump_reg("ShuffleEgress.unit_remain.unit_remain", 16);
+        drv.dump_reg("ShuffleIngress.ingress_counter", 1);
+        drv.dump_reg("ShuffleEgress.egress_counter", 1);
+    }
+
     void close() {
         ssize_t ret;
         struct msg_close msg_clo;
@@ -146,18 +163,34 @@ public:
 
             ::close(conn_fd);
         }
+        // dump_reg();
     }
 
     void loop() {
         while (!is_closed) {
             listen();
             accept();
+            drv.clear_tables();
             drv.init_tables();
             drv.init_registers();
             scatter();
             join();
             close();
-            drv.clear_tables();
+            while (true) {
+                // wait for input
+                std::string op;
+                std::cin >> op;
+                if (op == "q") {
+                    stop();
+                    break;
+                }
+                if (op == "c") {
+                    break;
+                }
+                if (op == "r") {
+                    dump_reg();
+                }
+            }
         }
     }
 

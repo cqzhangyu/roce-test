@@ -11,20 +11,12 @@ parser ShuffleIngressParser(
 
     state start {
         pkt.extract(ig_intr_md);
-        hdr.mirror_bridge.setValid();
-        hdr.mirror_bridge.pkt_type = PKT_TYPE_BYPASS;
+        ig_md.port_metadata = port_metadata_unpack<port_metadata_t>(pkt);
         pkt.extract(hdr.eth);
         transition select(hdr.eth.ether_type) {
             ETHERTYPE_IPV4 : parse_ipv4;
-            ETHERTYPE_REPL : parse_repl;
-            default : reject;
+            default : accept;
         }
-    }
-    
-    state parse_repl {
-        pkt.extract(hdr.repl);
-        pkt.extract(hdr.item0);
-        transition accept;
     }
 
     state parse_ipv4 {
@@ -66,8 +58,15 @@ parser ShuffleIngressParser(
             RDMA_OP_READ_RES_ONLY: parse_aeth;
             RDMA_OP_ACK: parse_aeth;
             RDMA_OP_CNP: accept;
+            RDMA_OP_REPL: parse_repl;
             default : accept;
         }
+    }
+    
+    state parse_repl {
+        pkt.extract(hdr.repl);
+        pkt.extract(hdr.item0);
+        transition accept;
     }
 
     state parse_reth {
@@ -81,7 +80,6 @@ parser ShuffleIngressParser(
     }
 }
 
-
 control ShuffleIngressDeparser(packet_out pkt,
                               inout ig_header_t hdr,
                               in ig_metadata_t ig_md,
@@ -93,17 +91,7 @@ control ShuffleIngressDeparser(packet_out pkt,
     apply {
         pkt.emit(hdr);
         if (ig_intr_dprsr_md.mirror_type == MIRROR_TYPE_I2E) {
-            mirror.emit<mirror_h>(ig_md.sess, {
-                ig_md.pkt_type,
-                // ig_md._mb_pad,
-                ig_md.flag,
-                // ig_md._repl_pad,
-                ig_md.item_cnt,
-                ig_md.item_id,
-                ig_md.src_id,
-                ig_md.len,
-                ig_md.write_off,
-                ig_md.src_addr});
+            mirror.emit<mirror_h>(ig_md.sess, ig_md.mirror);
         }
         if (hdr.ipv4.isValid()) {
             hdr.ipv4.hdr_checksum = csum.update({

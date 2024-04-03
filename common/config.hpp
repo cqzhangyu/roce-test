@@ -37,7 +37,7 @@ public:
         parser.add<int>("n_endpoint", 'e', "number of endpoints", false, 1);
         parser.add<int>("q_size", 0, "WQ size of each QP", false, 64);
         parser.add<size_t>("mr_size",'s', "mr size", false, 1024 * 1024 * 1024);
-        parser.add<int>("mtu", 0, "mtu", false, 1024);
+        parser.add<int>("mtu", 0, "mtu", false, 256);
 
         parser.add<string>("master_ip", 0, "master IP", false, "");
         parser.add<int>("master_port", 0, "master port", false, 1234);

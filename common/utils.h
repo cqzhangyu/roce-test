@@ -11,13 +11,15 @@ static inline int str2mac(const char *s, uint8_t *val) {
 
 
 static inline uint32_t str2ip(const char *s) {
-    // convert string to ip address
-    uint32_t val[4];
-    if (sscanf(s, "%d.%d.%d.%d", &val[0], &val[1], &val[2], &val[3])!= 4) {
-        return -1;
-    }
-    // big endian
-    return (val[0] << 24) | (val[1] << 16) | (val[2] << 8) | val[3];
+    uint32_t ip;
+    inet_pton(AF_INET, s, &ip);
+    return ip;
+}
+
+static inline std::string ip_to_str(uint32_t ip) {
+    char buf[INET6_ADDRSTRLEN];
+    inet_ntop(AF_INET, &ip, buf, sizeof(buf));
+    return std::string(buf);
 }
 
 static inline std::string sin_to_str(struct sockaddr_in *sin) {
@@ -39,7 +41,7 @@ static inline int try_read_msg(int fd, void *buf, size_t len, int64_t timeout) {
             return -1;
         }
     }
-    buf += ret;
+    buf = (void *)((uintptr_t)buf + ret);
     len -= ret;
     auto begin_time = std::chrono::high_resolution_clock::now();
     while (len > 0) {
@@ -53,7 +55,7 @@ static inline int try_read_msg(int fd, void *buf, size_t len, int64_t timeout) {
                 return -1;
             }
         }
-        buf += ret;
+        buf = (void *)((uintptr_t)buf + ret);
         len -= ret;
         if (ret > 0) {
             auto end_time = std::chrono::high_resolution_clock::now();

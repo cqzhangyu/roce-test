@@ -28,10 +28,23 @@
 #include <sys/ioctl.h>
 #include <net/if.h>
 
-#define MAX_NUM_ENDPOINT        8
+#define ENDP_SHIFT              3
+#define MAX_NUM_ENDPOINT        (1<<ENDP_SHIFT)
 #define MAX_NUM_QP              16
 #define MAX_Q_SIZE              1024
 #define MAX_SOCKET_BUFSIZE      4096
+
+#define UNIT_SHIFT              4
+#define UNIT_PER_ENDP           (1<<UNIT_SHIFT)
+#define UNIT_MASK               (UNIT_PER_ENDP-1)
+#define SHL_UNIT_SHIFT          (16-ENDP_SHIFT-UNIT_SHIFT)
+
+#define READ_RING_SHIFT         6
+#define READ_RING_SIZE          (1 << READ_RING_SHIFT)
+#define READ_RING_MASK          (READ_RING_SIZE - 1)
+#define WRITE_RING_SHIFT        8
+#define WRITE_RING_SIZE         (1 << WRITE_RING_SHIFT)
+#define WRITE_RING_MASK         (WRITE_RING_SIZE - 1)
 
 #define RDMA_OP_SEND_FIRST          0x00
 #define RDMA_OP_SEND_MIDDLE         0x01
@@ -65,10 +78,16 @@ struct endpoint_info {
     int rank;
     int lid;
     int psn;
-    int qpn;
     uint32_t rkey;
     void *addr;
     char gid[16];
+};
+
+struct shuffle_request {
+    uint16_t src_id;
+    uint16_t len;
+    uint32_t write_off;
+    uintptr_t src_addr;
 };
 
 #define MSG_TYPE_ACCEPT     0
@@ -92,6 +111,7 @@ struct msg_gather {
 
 struct msg_scatter {
     int type;
+    struct endpoint_info vir_ep_info;
     struct endpoint_info ep_infos[MAX_NUM_ENDPOINT];
     struct shuffle_qp_info dqp_info;
 };

@@ -35,7 +35,7 @@ using namespace std;
 
 #define THRIFT_PORT_NUM 7777
 
-#define MAX_MIRROR_LEN 40// mir_bri(1)+repl(5)+item(16)+ethernet(18)
+#define MAX_MIRROR_LEN 79// mir_bri(1)+repl(4)+item(16)+ethernet(14)
 
 #define ASSERT_STATUS(msg) logassert(status != BF_SUCCESS, msg, " : ", bf_err_str(status))
 
@@ -56,7 +56,7 @@ const char ips[][100] = {"192.168.1.1",
                          "192.168.1.100"};  // switch cpu
 
 const uint64_t mir_sess[] = {11, 12, 13, 14};
-const uint64_t ports[] = {180, 164, 148, 132, 64};
+const uint64_t ports[] = {180, 164, 148, 132, 192};
 const uint64_t lpbk_ports[] = {140, 156, 172, 188};//, 176, 184, 160, 168};
 
 class VSwitchd {
@@ -79,7 +79,6 @@ public:
 
     /* init bf_switchd */
     void init_switchd() {
-
         unique_ptr<bf_switchd_context_t> switchd_main_ctx = make_unique<bf_switchd_context_t>();
         switchd_main_ctx->install_dir = getenv("SDE_INSTALL");
         char conf_file[100];
@@ -89,6 +88,7 @@ public:
         switchd_main_ctx->skip_p4 = false;
         switchd_main_ctx->skip_port_add = false;
         switchd_main_ctx->running_in_background = true;
+        switchd_main_ctx->kernel_pkt = true;    // very important! to receive packet at kernel
         switchd_main_ctx->dev_sts_port = THRIFT_PORT_NUM;
         switchd_main_ctx->dev_sts_thread = true;
 
@@ -275,10 +275,12 @@ public:
         bf_status_t status;
         string tbl_name;
         bfrt::BfRtTable::TableType tbl_typ;
+        size_t tbl_size;
 
         status = table->tableNameGet(&tbl_name);
         status = table->tableTypeGet(&tbl_typ);
-        cout << "Printing info of Table " << tbl_name << ", type : " << int(tbl_typ) << endl;
+        status = table->tableSizeGet(*sess, dev_tgt, (size_t *)&tbl_size);
+        cout << "Printing info of Table " << tbl_name << ", type : " << int(tbl_typ) << ", size : " << tbl_size << endl;
         vector<bf_rt_id_t> field_ids;
 
         /* print the key fields */
@@ -346,6 +348,16 @@ public:
         }
         cout << "Print table info complete." << endl;
         return 0;
+    }
+    
+    int print_table_info(const string &table_name) {
+        bf_status_t status;
+        const bfrt::BfRtTable *tbl = nullptr;
+        status = bfrtInfo->bfrtTableFromNameGet(table_name, &tbl);
+        if (tbl == nullptr) {
+            return -1;
+        }
+        return print_table_info(tbl);
     }
 
     int clear_table(const bfrt::BfRtTable *table, bool is_atomic=false) {
@@ -422,6 +434,9 @@ public:
         bf_status_t status;
         const bfrt::BfRtTable *table = nullptr;
         status = bfrtInfo->bfrtTableFromNameGet(table_name, &table);
+        if (table == nullptr) {
+            return -1;
+        }
         return clear_table(table, is_atomic);
     }
 

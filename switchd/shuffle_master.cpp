@@ -20,6 +20,8 @@ int main(int argc, char **argv) {
     signal(SIGTERM, signal_handler);
 
     master = new ShuffleMaster(cfg);
+
     master->run();
+
     return 0;
 }
